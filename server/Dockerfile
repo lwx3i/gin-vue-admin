@@ -1,19 +1,41 @@
 FROM golang:alpine as builder
+RUN  apk add --update --no-cache yarn make g++
+RUN yarn global add cross-env node-sass
 
-# 设置go mod proxy 国内代理
-# 设置golang path
 ENV GOPROXY=https://goproxy.cn,https://goproxy.io,direct \
     GO111MODULE=on \
     CGO_ENABLED=1
-WORKDIR /ginvue
+WORKDIR /go/src/gin-vue-admin
 RUN go env -w GOPROXY=https://goproxy.cn,https://goproxy.io,direct
-COPY . .
-RUN go env && go list && go build -o app main.go
+COPY server/ ./
+RUN go env && go list && go build -v -a -ldflags "-extldflags \"-static\" " -o gvadmin .
 
-EXPOSE 8888
-ENTRYPOINT /ginvue/app
+WORKDIR /web
+COPY web/ ./
+RUN yarn install && yarn run build
 
-# 根据Dockerfile生成Docker镜像
-# docker build -t ginvue .
-# 根据Docker镜像启动Docker容器
-# docker run -itd -p 8888:8888 --name ginvue ginvue
+
+FROM nginx:alpine
+LABEL MAINTAINER="rikugun"
+
+RUN apk add --no-cache  gettext tzdata   && \
+    cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    echo "Asia/Shanghai" >  /etc/timezone && \
+    date && \
+    apk del tzdata
+
+COPY docker/etc/nginx/nginx.conf.tpl /etc/nginx/nginx.conf.tpl
+WORKDIR /app
+#copy web
+COPY --from=builder /web/dist/ /var/www/
+#copy go app
+COPY --from=builder /go/src/gin-vue-admin/gvadmin ./
+COPY --from=builder /go/src/gin-vue-admin/db.db ./
+COPY --from=builder /go/src/gin-vue-admin/config.yaml ./
+COPY --from=builder /go/src/gin-vue-admin/resource ./resource
+COPY docker/docker-start.sh ./
+
+ENV API_SERVER="http://localhost:8888/"
+EXPOSE 80
+
+ENTRYPOINT ["./docker-start.sh"]
